@@ -10,15 +10,16 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import kotlinx.coroutines.tasks.await
 
+/** Holds one detected + translated text block */
 data class TranslationResult(
     val original: String,
     val translated: String,
     val bounds: Rect,
-    val fontSize: Float
+    val fontSize: Float // estimated px, used to size the overlay label
 )
 
 class TranslationEngine {
-
+    // ── ML Kit clients ────────────────────────────────────────────────────────
     private val recognizer = TextRecognition.getClient(
         ChineseTextRecognizerOptions.Builder().build()
     )
@@ -29,27 +30,38 @@ class TranslationEngine {
             .build()
     )
 
+    /**
+     * LRU cache — avoids re-translating the same Chinese string every frame.
+     * Keeps up to 120 entries; oldest are dropped automatically.
+     */
     private val cache = object : LinkedHashMap<String, String>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) =
             size > 120
     }
 
     init {
+        // Trigger background download of the ZH→EN model (~30 MB, one-time)
         translator.downloadModelIfNeeded()
             .addOnFailureListener { it.printStackTrace() }
     }
 
+    // ── Public API ────────────────────────────────────────────────────────────
+    /** Run OCR + translation on one bitmap frame. Returns overlay instructions. */
     suspend fun processFrame(bitmap: Bitmap): List<TranslationResult> {
         val image = InputImage.fromBitmap(bitmap, 0)
         val visionText = recognizer.process(image).await()
         val results = mutableListOf<TranslationResult>()
+        
         for (block in visionText.textBlocks) {
             val raw = block.text.trim()
             if (raw.isBlank() || !hasChinese(raw)) continue
             val bounds = block.boundingBox ?: continue
             val translated = translateCached(raw)
+            
+            // Skip if translation is identical (means model wasn't ready yet)
             if (translated.isBlank() || translated == raw) continue
             val estimatedFontPx = estimateFontSize(block.lines.firstOrNull()?.boundingBox)
+            
             results.add(
                 TranslationResult(
                     original = raw,
@@ -67,6 +79,7 @@ class TranslationEngine {
         translator.close()
     }
 
+    // ── Private helpers ───────────────────────────────────────────────────────
     private suspend fun translateCached(text: String): String {
         cache[text]?.let { return it }
         return try {
@@ -78,17 +91,27 @@ class TranslationEngine {
         }
     }
 
+    /** True if the string contains at least one CJK character */
     private fun hasChinese(text: String): Boolean =
         text.any { c -> c.code in 0x4E00..0x9FFF || c.code in 0x3400..0x4DBF }
 
+    /**
+     * Estimate font size from the first line's bounding box height.
+     * Clamp to a readable range for the overlay.
+     */
     private fun estimateFontSize(lineBox: Rect?): Float =
         (lineBox?.height()?.toFloat() ?: 18f).coerceIn(12f, 30f)
 
+    /**
+     * Light post-processing to make the English text feel more natural:
+     * - Capitalize first letter of sentences
+     * - Remove stray punctuation artifacts common in game UI strings
+     */
     private fun postProcess(text: String): String {
         return text.trim()
-            .replace(Regex("\\s{2,}"), " ")
-            .replace(Regex("^[^a-zA-Z0-9(\\[{]+"), "")
+            .replace(Regex("\\s{2,}"), " ") // collapse double spaces
+            .replace(Regex("^[^a-zA-Z0-9(\\[{]+"), "") // strip leading symbols
             .replaceFirstChar { it.uppercaseChar() }
-            .let { if (it.length > 60) it.take(57) + "…" else it }
+            .let { if (it.length > 60) it.take(57) + "…" else it } // hard cap long strings
     }
 }
