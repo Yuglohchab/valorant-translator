@@ -18,9 +18,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var mediaProjectionManager: MediaProjectionManager
 
+    /** Step 1: Ask user to allow "Draw over other apps" */
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
+    ) { _ ->
         if (Settings.canDrawOverlays(this)) {
             requestMediaProjection()
         } else {
@@ -31,13 +32,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Step 2: Ask user to allow screen recording */
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             startTranslatorService(result.resultCode, result.data!!)
         } else {
-            setStatus("Permission denied - screen capture cancelled", isError = true)
+            setStatus("Permission denied screen capture cancelled", isError = true)
         }
     }
 
@@ -70,11 +72,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnStart.isEnabled = !running
         binding.btnStop.isEnabled = running
         binding.btnStart.alpha = if (running) 0.5f else 1f
-
+        
         binding.statusDot.setColorFilter(
             if (running) 0xFF00E676.toInt() else 0xFF546E7A.toInt()
         )
-
+        
         setStatus(if (running) "Translator Active - overlay running" else "Ready to start")
 
         if (!running) {
