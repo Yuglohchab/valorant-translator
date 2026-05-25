@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:padding="24dp"
+    android:background="#0D1117">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:text="VALORANT"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.3"
+        android:textColor="#FF4655" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="LIVE TRANSLATOR"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.1"
+        android:textColor="#ECEDEE"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Chinese → English • On-device"
+        android:textSize="12sp"
+        android:textColor="#546E7A"
+        android:layout_marginBottom="32dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#161B22"
+        android:padding="14dp"
+        android:layout_marginBottom="24dp">
+        <ImageView
+            android:id="@+id/statusDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:src="@drawable/circle"
+            android:layout_marginEnd="10dp" />
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ready to start"
+            android:textSize="13sp"
+            android:textColor="#8B9BB4" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#161B22"
+        android:padding="16dp"
+        android:layout_marginBottom="24dp">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="HOW TO USE"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.2"
+            android:textColor="#FF4655"
+            android:layout_marginBottom="10dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="1. Tap START and grant overlay permission\n2. Allow screen capture when prompted\n3. Open Valorant Mobile (Chinese)\n4. English overlays appear on Chinese text\n5. Tap STOP or use the notification to quit"
+            android:textSize="13sp"
+            android:textColor="#8B9BB4"
+            android:lineSpacingExtra="5dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvDownloadNote"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⚠ First run: the translation model (~30 MB) downloads automatically. Keep Wi-Fi on."
+        android:textSize="11sp"
+        android:textColor="#FFC107"
+        android:padding="12dp"
+        android:background="#1E1A00"
+        android:layout_marginBottom="24dp" />
+
+    <Space android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
+
+    <Button
+        android:id="@+id/btnStart"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="START TRANSLATOR"
+        android:textStyle="bold"
+        android:letterSpacing="0.08"
+        android:backgroundTint="#FF4655"
+        android:layout_marginBottom="10dp" />
+
+    <Button
+        android:id="@+id/btnStop"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="STOP TRANSLATOR"
+        android:textStyle="bold"
+        android:backgroundTint="#1C2128"
+        android:enabled="false"
+        android:layout_marginBottom="32dp" />
+</LinearLayout>
