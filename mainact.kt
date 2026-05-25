@@ -1,145 +1,199 @@
 package com.valoranttranslator
 
-import android.app.Activity
+import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
-import android.os.Bundle
-import android.provider.Settings
-import android.view.View
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
-import com.valoranttranslator.databinding.ActivityMainBinding
+import android.os.*
+import android.util.DisplayMetrics
+import android.view.WindowManager
+import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
 
-class MainActivity : AppCompatActivity() {
+class OverlayTranslatorService : Service() {
 
-    private lateinit var binding: ActivityMainBinding
-    private lateinit var mediaProjectionManager: MediaProjectionManager
+    companion object {
+        const val EXTRA_RESULT_CODE = "extra_result_code"
+        const val EXTRA_PROJECTION_DATA = "extra_projection_data"
+        private const val CHANNEL_ID = "vt_channel_01"
+        private const val NOTIFICATION_ID = 42
+        private const val CAPTURE_INTERVAL_MS = 900L
 
-    /** Step 1: Ask user to allow "Draw over other apps" */
-    private val overlayPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { _ ->
-        if (Settings.canDrawOverlays(this)) {
-            requestMediaProjection()
+        @Volatile var isRunning = false
+    }
+
+    private lateinit var mediaProjection: MediaProjection
+    private lateinit var virtualDisplay: VirtualDisplay
+    private lateinit var imageReader: ImageReader
+    private lateinit var windowManager: WindowManager
+    private lateinit var translationEngine: TranslationEngine
+    private lateinit var overlayManager: OverlayManager
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private var screenWidth = 0
+    private var screenHeight = 0
+    private var screenDensity = 0
+
+    override fun onCreate() {
+        super.onCreate()
+        isRunning = true
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        resolveScreenMetrics()
+        createNotificationChannel()
+        translationEngine = TranslationEngine()
+        overlayManager = OverlayManager(this, windowManager)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "STOP") {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        startForeground(NOTIFICATION_ID, buildNotification())
+
+        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: return START_NOT_STICKY
+        
+        val projectionData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent::class.java)
         } else {
-            showDialog(
-                "Overlay Permission Required",
-                "The app needs permission to draw over other apps to show translations on top of Valorant."
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(EXTRA_PROJECTION_DATA)
+        }
+
+        if (projectionData == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val projMgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = projMgr.getMediaProjection(resultCode, projectionData)
+
+        setupImageReader()
+        startCaptureLoop()
+
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        isRunning = false
+        serviceScope.cancel()
+        overlayManager.clearAll()
+        runCatching { virtualDisplay.release() }
+        runCatching { imageReader.close() }
+        runCatching { mediaProjection.stop() }
+        translationEngine.close()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun resolveScreenMetrics() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val wm = windowManager.currentWindowMetrics.bounds
+            screenWidth = wm.width()
+            screenHeight = wm.height()
+        } else {
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getMetrics(metrics)
+            screenWidth = metrics.widthPixels
+            screenHeight = metrics.heightPixels
+        }
+        screenDensity = resources.displayMetrics.densityDpi
+    }
+
+    private fun setupImageReader() {
+        imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+        virtualDisplay = mediaProjection.createVirtualDisplay(
+            "ValorantTranslatorCapture",
+            screenWidth, screenHeight, screenDensity,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader.surface,
+            null, null
+        )
+    }
+
+    private fun startCaptureLoop() {
+        serviceScope.launch {
+            while (isActive) {
+                captureAndTranslate()
+                delay(CAPTURE_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun captureAndTranslate() {
+        val bitmap = acquireLatestBitmap() ?: return
+        try {
+            val results = runBlocking { translationEngine.processFrame(bitmap) }
+            Handler(Looper.getMainLooper()).post {
+                overlayManager.updateOverlays(results)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun acquireLatestBitmap(): Bitmap? {
+        val image = imageReader.acquireLatestImage() ?: return null
+        return try {
+            val plane = image.planes[0]
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+            val rowPadding = rowStride - pixelStride * screenWidth
+
+            val raw = Bitmap.createBitmap(
+                screenWidth + rowPadding / pixelStride,
+                screenHeight,
+                Bitmap.Config.ARGB_8888
             )
+            raw.copyPixelsFromBuffer(plane.buffer)
+            if (rowPadding == 0) raw
+            else Bitmap.createBitmap(raw, 0, 0, screenWidth, screenHeight).also { raw.recycle() }
+        } finally {
+            image.close()
         }
     }
 
-    /** Step 2: Ask user to allow screen recording */
-    private val mediaProjectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            startTranslatorService(result.resultCode, result.data!!)
-        } else {
-            setStatus("Permission denied screen capture cancelled", isError = true)
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Valorant Translator",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Live screen translation service"
+            setShowBadge(false)
         }
+        (getSystemService(NotificationManager::class.java)).createNotificationChannel(channel)
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        setupButtons()
-        syncUI()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        syncUI()
-    }
-
-    private fun setupButtons() {
-        binding.btnStart.setOnClickListener {
-            checkAndRequestPermissions()
-        }
-        binding.btnStop.setOnClickListener {
-            stopTranslatorService()
-        }
-    }
-
-    private fun syncUI() {
-        val running = OverlayTranslatorService.isRunning
-        binding.btnStart.isEnabled = !running
-        binding.btnStop.isEnabled = running
-        binding.btnStart.alpha = if (running) 0.5f else 1f
-        
-        binding.statusDot.setColorFilter(
-            if (running) 0xFF00E676.toInt() else 0xFF546E7A.toInt()
+    private fun buildNotification(): Notification {
+        val stopIntent = Intent(this, OverlayTranslatorService::class.java).apply { action = "STOP" }
+        val stopPi = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
-        setStatus(if (running) "Translator Active - overlay running" else "Ready to start")
-
-        if (!running) {
-            binding.tvDownloadNote.visibility = View.VISIBLE
-        } else {
-            binding.tvDownloadNote.visibility = View.GONE
-        }
-    }
-
-    private fun setStatus(msg: String, isError: Boolean = false) {
-        binding.tvStatus.text = msg
-        binding.tvStatus.setTextColor(
-            if (isError) 0xFFFF4655.toInt() else 0xFF8B9BB4.toInt()
+        val openPi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
         )
-    }
-
-    private fun checkAndRequestPermissions() {
-        if (!Settings.canDrawOverlays(this)) {
-            AlertDialog.Builder(this)
-                .setTitle("Overlay Permission")
-                .setMessage("To display translations on top of Valorant, this app needs the \"Display over other apps\" permission.\n\nTap OK to open settings.")
-                .setPositiveButton("OK") { _, _ ->
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    overlayPermissionLauncher.launch(intent)
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        } else {
-            requestMediaProjection()
-        }
-    }
-
-    private fun requestMediaProjection() {
-        setStatus("Waiting for screen capture permission...")
-        mediaProjectionLauncher.launch(
-            mediaProjectionManager.createScreenCaptureIntent()
-        )
-    }
-
-    private fun startTranslatorService(resultCode: Int, data: Intent) {
-        val intent = Intent(this, OverlayTranslatorService::class.java).apply {
-            putExtra(OverlayTranslatorService.EXTRA_RESULT_CODE, resultCode)
-            putExtra(OverlayTranslatorService.EXTRA_PROJECTION_DATA, data)
-        }
-        startForegroundService(intent)
-        setStatus("Starting translator...")
-        syncUI()
-    }
-
-    private fun stopTranslatorService() {
-        stopService(Intent(this, OverlayTranslatorService::class.java))
-        OverlayTranslatorService.isRunning = false
-        syncUI()
-    }
-
-    private fun showDialog(title: String, message: String) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show()
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("🎮 Valorant Translator Active")
+            .setContentText("Translating Chinese → English in real-time")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setContentIntent(openPi)
+            .addAction(android.R.drawable.ic_delete, "Stop", stopPi)
+            .setOngoing(true)
+            .build()
     }
 }
